@@ -12,7 +12,13 @@ changed. No comment is posted.
 
 ## Input
 
-A **GitLab issue URL**, for example:
+Either of two things:
+
+- A **single GitLab issue URL** — prioritize that one issue.
+- A **project URL or path** (e.g. `https://gitlab.example.com/group/project`) — find
+  every open issue with no priority and prioritize them all. See *Bulk mode* below.
+
+A single issue URL looks like:
 
 ```
 https://gitlab.example.com/group/project/-/issues/42
@@ -26,19 +32,25 @@ If the user gives only a number, ask for the full issue URL before continuing.
 
 ## Tools
 
-Two scripts in this skill's `scripts/` directory do all the GitLab work. Use only
-these; do not call any other command to read or change the issue.
+Four scripts in this skill's `scripts/` directory do all the GitLab work. Use only
+these; do not call any other command to read or change issues or labels.
 
 - `scripts/glab-issue-show.sh <issue-url>` — prints the issue's title, state, labels,
   current priority, description, and comments.
 - `scripts/glab-issue-prioritize.sh <issue-url> <priority>` — sets the
   `priority::{priority}` label. It refuses (writes nothing, non-zero exit) if a
   priority label already exists.
+- `scripts/glab-issues-unprioritized.sh <project-url-or-path>` — prints, one web URL
+  per line, every **open** issue in the project that has no `priority::` label. A
+  summary count goes to stderr. Use it to drive a whole-project pass.
+- `scripts/glab-labels-ensure.sh <project-url-or-path> [--create]` — without a flag,
+  reports which of the four `priority::` labels exist and which are missing (creates
+  nothing). With `--create`, creates the missing ones with color `#ff5353`.
 
 Run them from the repository root, e.g.
 `.agents/skills/estimate-issue-priority/scripts/glab-issue-show.sh <issue-url>`.
 
-## Procedure
+## Procedure (single issue)
 
 1. **Read the issue.** Run `glab-issue-show.sh <issue-url>`.
 2. **Stop if already prioritized.** If the `PRIORITY:` line is anything other than
@@ -51,6 +63,24 @@ Run them from the repository root, e.g.
 5. **Set it.** Run `glab-issue-prioritize.sh <issue-url> <priority>`.
 6. **Report the result** to the user: the chosen priority. If the script prints
    `REFUSED` or `FAILED`, relay that plainly and do not retry blindly.
+
+## Bulk mode (whole project)
+
+When given a project rather than a single issue, prioritize every open issue that has
+no priority yet:
+
+1. **Ensure the labels exist.** Run `glab-labels-ensure.sh <project>` (no flag) to
+   check. If it reports any `MISSING` label, **ask the user to confirm** before
+   creating them — show which are missing and that they will be created with color
+   `#ff5353`. Only after the user agrees, run `glab-labels-ensure.sh <project>
+   --create`. Never pass `--create` without that confirmation.
+2. **List the work.** Run `glab-issues-unprioritized.sh <project>` to get the open,
+   unprioritized issue URLs (one per line). Relay the summary count to the user.
+3. **Prioritize each one** by running the single-issue procedure above for every URL
+   in the list. The `glab-issue-prioritize.sh` guard still protects each issue, so a
+   race that prioritizes an issue meanwhile is handled safely (it returns `REFUSED`).
+4. **Report a tally** at the end: how many issues were prioritized and the breakdown
+   by priority, plus any that were `REFUSED`/`FAILED`.
 
 ## Priority rubric
 
