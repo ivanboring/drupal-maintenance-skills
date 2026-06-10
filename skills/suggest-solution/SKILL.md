@@ -237,6 +237,13 @@ with **real line breaks** — pass an argument that actually contains newlines (
 between paragraphs), not one long run-on line. Use a markdown bullet list where you are
 listing several files or steps.
 
+**Slash commands are neutralised.** Before posting, `suggest` strips the leading slash from
+any line that begins with a slash-command (`/issue` → `issue`, `/close` → `close`) so the
+comment can never trigger a GitLab quick action. Only the **start of a line** is affected —
+inline slashes, URLs (`https://…`) and file paths (`src/Plugin/…`) are left untouched — so
+you do not need to avoid those, but be aware a snippet line that legitimately starts with a
+slash will lose that leading slash in the posted comment.
+
 If, after reading the code, you cannot identify a credible fix (the cause is unclear, the
 relevant code is missing, or it would need changes well beyond the estimate), **do not
 guess**. Skip the issue and report why — do not post a low-confidence suggestion.

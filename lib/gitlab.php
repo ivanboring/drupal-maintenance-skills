@@ -401,15 +401,33 @@ final class GitLab {
     $this->request('PUT', '/issues/' . $this->iid, [], ['weight' => $weight]);
   }
 
+  /**
+   * Neutralise GitLab "quick action" slash-commands in an outgoing comment body
+   * so they are posted as plain text instead of being executed by GitLab. A
+   * quick action fires only when a line BEGINS with "/command" (e.g. /close,
+   * /label, /assign, /spend), so we strip the leading slash at the start of any
+   * line ("/issue" -> "issue") while leaving inline slashes, URLs (https://...)
+   * and file paths (src/Plugin/...) untouched. Applied to EVERY comment this
+   * client posts, so all skills get the protection in one place.
+   */
+  public static function stripSlashCommands(string $body): string {
+    // ^(\h*)        optional indentation at the start of a line (multiline)
+    // \/            a literal slash ...
+    // (?=[A-Za-z])  ... only when immediately followed by a letter (a command).
+    return preg_replace('/^(\h*)\/(?=[A-Za-z])/m', '$1', $body) ?? $body;
+  }
+
   /** Post a comment on the issue. */
   public function addComment(string $body): void {
     $this->requireIid();
+    $body = self::stripSlashCommands($body);
     $this->request('POST', '/issues/' . $this->iid . '/notes', [], ['body' => $body]);
   }
 
   /** Edit an existing comment (note) on the issue. */
   public function editComment(int $noteId, string $body): void {
     $this->requireIid();
+    $body = self::stripSlashCommands($body);
     $this->request('PUT', '/issues/' . $this->iid . '/notes/' . $noteId, [], ['body' => $body]);
   }
 

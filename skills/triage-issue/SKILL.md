@@ -235,6 +235,12 @@ Automated Triage: This bug report does not yet have enough information to reprod
 (A blank line before the list, and each item on its own line, are what produce the row
 breaks. The `why::needsInfo`-removal note is appended for you on its own paragraph.)
 
+**Slash commands are neutralised.** Before any comment is posted, the leading slash is
+stripped from any line that begins with a slash-command (`/close` → `close`, `/issue` →
+`issue`) so a comment can never trigger a GitLab quick action. Only the **start of a line**
+is affected — inline slashes, URLs (`https://…`) and file paths (`src/Plugin/…`) are left
+untouched. This is enforced centrally for every comment the tooling posts.
+
 ## Weight rubric
 
 Estimate **time, not complexity** — how long the work takes a senior developer who knows

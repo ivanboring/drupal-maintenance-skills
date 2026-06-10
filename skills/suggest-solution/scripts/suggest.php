@@ -50,7 +50,10 @@
  *
  *   suggest      <issue-url> <comment> [--force]
  *                Post <comment> (the agent's up-to-4-paragraph write-up) and add
- *                automation::suggestionExists. Refuses unless the issue is
+ *                automation::suggestionExists. The comment is sanitised first —
+ *                leading slash-commands are neutralised ("/close" -> "close") so
+ *                GitLab quick actions cannot be triggered — and the AI
+ *                disclaimer is appended. Refuses unless the issue is
  *                state::accepted + category::bug + weight in {1,2,4,8}, is not
  *                already labelled automation::suggestionExists, and has no
  *                open/merged merge request. Also scans the issue text for prompt
@@ -488,6 +491,8 @@ try {
 
     case 'suggest': {
       $gl = GitLab::fromIssue(need($pos, 0, 'issue-url'));
+      // Append the AI disclaimer; GitLab quick-action slash commands are
+      // neutralised centrally when the comment is posted (GitLab::addComment).
       $comment = with_disclaimer(need($pos, 1, 'comment'));
       $issue = $gl->getIssue();
 

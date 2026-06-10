@@ -25,6 +25,8 @@ talking to the GitLab REST API v4 directly.
 
 The skill only talks to dedicated projects, and only uses dedicated scripts that calls the REST API with the provided tokens. There is no shell execution, no git remotes, and no code execution at all. The skill is safe to run and perfect for automation. It can only read issues, change labels, estimations and comment.
 
+Any comment written will be deterministically stripped of any slash commands, so no prompt injection escalation is possible through comments.
+
 With that being said, prompt injection is a real possibility, to mitigate this, do the following:
 
 1. Use only project access tokens, not personal access tokens.
