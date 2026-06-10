@@ -35,6 +35,8 @@ With that being said, prompt injection is a real possibility, to mitigate this, 
 4. Run it using a harness that follows `disallowed-tools`.
 5. Always use the `/skill` command to run the skill, so that the disallowed tools are enforced.
 
+If prompt injection bypasses guardrails, the worst that can happen is that the skill makes unwanted comment (without slash commands) or changes labels/estimations on issues. It cannot do anything else, and it cannot do anything outside the project(s) it has access to.
+
 ## Configuration
 
 All commands run **only** against projects listed in `config/config.php`, and **only**

@@ -121,35 +121,7 @@ function eligible_weight(array $issue): bool {
 
 /** @return array<string,string> signal label => case-insensitive regex. */
 function injection_patterns(): array {
-  return [
-    // "ignore/disregard/forget the previous instructions/prompt/rules".
-    'override-prior-instructions' =>
-      '/\b(?:ignore|disregard|forget|override|bypass)\b.{0,40}?\b(?:previous|prior|above|earlier|preceding|all|any|these|the)\b.{0,20}?\b(?:instruction|instructions|prompt|prompts|directive|directives|rule|rules|context|guardrails?)\b/is',
-    // An imperative aimed straight at the assistant/agent by name.
-    'addresses-the-assistant' =>
-      '/\b(?:assistant|ai\s*agent|the\s+agent|claude|chatgpt|gpt|language\s+model|llm|system)\b\s*[,:]?\s+(?:please\s+)?(?:ignore|disregard|stop|now\s+you|you\s+must|you\s+should|you\s+will|execute|run|post|delete|remove|send|reveal|output)\b/is',
-    // Telling the agent to act behind the user's back.
-    'suppress-disclosure' =>
-      '/\b(?:do\s*not|don.?t|never|without)\b.{0,20}?\b(?:tell|inform|notify|warn|mention|reveal|let|alert)\b.{0,20}?\b(?:the\s+)?(?:user|human|maintainer|operator|reviewer|anyone|them)\b/is',
-    // Attempts to exfiltrate secrets / the system prompt.
-    'exfiltrate-secrets' =>
-      '/\b(?:reveal|print|show|echo|output|expose|leak|send|disclose|exfiltrate|dump|paste|repeat)\b.{0,40}?\b(?:system\s+prompt|api[\s\-]?key|access\s+token|private[\s\-]?token|secret|credential|password|env(?:ironment)?\s+var|config(?:uration)?\s+file)\b/is',
-    // Naming this skill's own internals — a real ai_agents bug would not.
-    'references-skill-internals' =>
-      '/(?:PRIVATE-TOKEN|config\/config\.php|lib\/gitlab\.php|suggest\.php|\$config\[)/i',
-    // "run/execute the following command/code/script".
-    'execute-commands' =>
-      '/\b(?:run|execute|eval|exec)\b.{0,20}?\b(?:the\s+)?(?:following|this|these|below)\b.{0,20}?\b(?:command|commands|code|script|shell|bash|payload)\b/is',
-    // Jailbreak personas / modes.
-    'jailbreak-persona' =>
-      '/\b(?:do\s+anything\s+now|developer\s+mode|jailbreak|unrestricted\s+mode|without\s+any\s+restrictions)\b/is',
-    // Chat/template control delimiters used to fake a system turn.
-    'instruction-delimiters' =>
-      '/<\|[^|]{0,40}\|>|\[\/?(?:INST|SYS|SYSTEM)\]|<\/?(?:system|assistant)>|#{2,}\s*(?:system|instruction)\b/i',
-    // Zero-width / bidi-control characters used to hide injected text.
-    'hidden-unicode' =>
-      '/[\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{FEFF}]/u',
-  ];
+  return GitLab::promptInjectionPatterns();
 }
 
 /**
@@ -159,15 +131,7 @@ function injection_patterns(): array {
  * @return array<int,array{where:string,text:string}>
  */
 function injection_sources(array $issue, array $comments): array {
-  $sources = [
-    ['where' => 'title',       'text' => (string) ($issue['title'] ?? '')],
-    ['where' => 'description', 'text' => (string) ($issue['description'] ?? '')],
-  ];
-  foreach ($comments as $note) {
-    $author = $note['author']['username'] ?? ($note['author']['name'] ?? 'unknown');
-    $sources[] = ['where' => "comment by $author", 'text' => (string) ($note['body'] ?? '')];
-  }
-  return $sources;
+  return GitLab::promptInjectionSources($issue, $comments);
 }
 
 /**
@@ -177,23 +141,7 @@ function injection_sources(array $issue, array $comments): array {
  * @return array<int,array{signal:string,where:string,excerpt:string}> hits ([] = clean)
  */
 function scan_injection(array $sources): array {
-  $hits = [];
-  foreach ($sources as $src) {
-    $text = (string) $src['text'];
-    if ($text === '') {
-      continue;
-    }
-    foreach (injection_patterns() as $label => $regex) {
-      if (preg_match($regex, $text, $m, PREG_OFFSET_CAPTURE)) {
-        $at = (int) $m[0][1];
-        $start = max(0, $at - 25);
-        $excerpt = substr($text, $start, 110);
-        $excerpt = trim(preg_replace('/\s+/', ' ', $excerpt) ?? '');
-        $hits[] = ['signal' => $label, 'where' => $src['where'], 'excerpt' => $excerpt];
-      }
-    }
-  }
-  return $hits;
+  return GitLab::scanPromptInjection($sources);
 }
 
 /**
@@ -458,7 +406,9 @@ try {
       try {
         // PHP's bundled Phar reads zip archives, so no unzip binary / ext-zip
         // is needed. extractTo(..., overwrite=true).
-        (new PharData($zipPath))->extractTo($tmp, null, true);
+        $archive = new PharData($zipPath);
+        GitLab::validateArchiveForExtraction($archive);
+        $archive->extractTo($tmp, null, true);
       } catch (Throwable $e) {
         @unlink($zipPath);
         rrmdir($tmp);

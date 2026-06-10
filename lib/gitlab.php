@@ -312,6 +312,30 @@ final class GitLab {
     }
   }
 
+  /**
+   * Validate a zip archive before extraction. GitLab archives should contain
+   * ordinary relative paths under a single top-level directory; reject absolute
+   * paths, parent traversal, hidden control characters, and symlink/link entries.
+   */
+  public static function validateArchiveForExtraction(PharData $archive): void {
+    $it = new RecursiveIteratorIterator($archive);
+    foreach ($it as $file) {
+      if (!$file instanceof PharFileInfo) {
+        continue;
+      }
+      $name = str_replace('\\', '/', $file->getRelativePathName());
+      if ($name === '' || str_starts_with($name, '/') || preg_match('#(^|/)\.\.(/|$)#', $name)) {
+        throw new TriageError("REFUSED: archive contains an unsafe path: $name");
+      }
+      if (preg_match('/[\x00-\x1F\x7F\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{FEFF}]/u', $name)) {
+        throw new TriageError("REFUSED: archive contains a path with hidden/control characters.");
+      }
+      if ($file->isLink()) {
+        throw new TriageError("REFUSED: archive contains a symlink/link entry: $name");
+      }
+    }
+  }
+
   /* ----------------------------------------------------------------------- *
    * Issue + label operations
    * ----------------------------------------------------------------------- */
@@ -415,6 +439,77 @@ final class GitLab {
     // \/            a literal slash ...
     // (?=[A-Za-z])  ... only when immediately followed by a letter (a command).
     return preg_replace('/^(\h*)\/(?=[A-Za-z])/m', '$1', $body) ?? $body;
+  }
+
+  /* ----------------------------------------------------------------------- *
+   * Prompt-injection scanning
+   * ----------------------------------------------------------------------- */
+
+  /** @return array<string,string> signal label => case-insensitive regex. */
+  public static function promptInjectionPatterns(): array {
+    return [
+      'override-prior-instructions' =>
+        '/\b(?:ignore|disregard|forget|override|bypass)\b.{0,40}?\b(?:previous|prior|above|earlier|preceding|all|any|these|the)\b.{0,20}?\b(?:instruction|instructions|prompt|prompts|directive|directives|rule|rules|context|guardrails?)\b/is',
+      'addresses-the-assistant' =>
+        '/\b(?:assistant|ai\s*agent|the\s+agent|claude|chatgpt|gpt|language\s+model|llm|system)\b\s*[,:]?\s+(?:please\s+)?(?:ignore|disregard|stop|now\s+you|you\s+must|you\s+should|you\s+will|execute|run|post|delete|remove|send|reveal|output)\b/is',
+      'suppress-disclosure' =>
+        '/\b(?:do\s*not|don.?t|never|without)\b.{0,20}?\b(?:tell|inform|notify|warn|mention|reveal|let|alert)\b.{0,20}?\b(?:the\s+)?(?:user|human|maintainer|operator|reviewer|anyone|them)\b/is',
+      'exfiltrate-secrets' =>
+        '/\b(?:reveal|print|show|echo|output|expose|leak|send|disclose|exfiltrate|dump|paste|repeat)\b.{0,40}?\b(?:system\s+prompt|api[\s\-]?key|access\s+token|private[\s\-]?token|secret|credential|password|env(?:ironment)?\s+var|config(?:uration)?\s+file)\b/is',
+      'references-skill-internals' =>
+        '/(?:PRIVATE-TOKEN|config\/config\.php|lib\/gitlab\.php|suggest\.php|triage\.php|\$config\[)/i',
+      'execute-commands' =>
+        '/\b(?:run|execute|eval|exec)\b.{0,20}?\b(?:the\s+)?(?:following|this|these|below)\b.{0,20}?\b(?:command|commands|code|script|shell|bash|payload)\b/is',
+      'jailbreak-persona' =>
+        '/\b(?:do\s+anything\s+now|developer\s+mode|jailbreak|unrestricted\s+mode|without\s+any\s+restrictions)\b/is',
+      'instruction-delimiters' =>
+        '/<\|[^|]{0,40}\|>|\[\/?(?:INST|SYS|SYSTEM)\]|<\/?(?:system|assistant)>|#{2,}\s*(?:system|instruction)\b/i',
+      'hidden-unicode' =>
+        '/[\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{FEFF}]/u',
+    ];
+  }
+
+  /**
+   * Build the list of untrusted text sources for an issue.
+   *
+   * @return array<int,array{where:string,text:string}>
+   */
+  public static function promptInjectionSources(array $issue, array $comments): array {
+    $sources = [
+      ['where' => 'title',       'text' => (string) ($issue['title'] ?? '')],
+      ['where' => 'description', 'text' => (string) ($issue['description'] ?? '')],
+    ];
+    foreach ($comments as $note) {
+      $author = $note['author']['username'] ?? ($note['author']['name'] ?? 'unknown');
+      $sources[] = ['where' => "comment by $author", 'text' => (string) ($note['body'] ?? '')];
+    }
+    return $sources;
+  }
+
+  /**
+   * Scan untrusted sources for prompt-injection signals.
+   *
+   * @param array<int,array{where:string,text:string}> $sources
+   * @return array<int,array{signal:string,where:string,excerpt:string}> hits ([] = clean)
+   */
+  public static function scanPromptInjection(array $sources): array {
+    $hits = [];
+    foreach ($sources as $src) {
+      $text = (string) ($src['text'] ?? '');
+      if ($text === '') {
+        continue;
+      }
+      foreach (self::promptInjectionPatterns() as $label => $regex) {
+        if (preg_match($regex, $text, $m, PREG_OFFSET_CAPTURE)) {
+          $at = (int) $m[0][1];
+          $start = max(0, $at - 25);
+          $excerpt = substr($text, $start, 110);
+          $excerpt = trim(preg_replace('/\s+/', ' ', $excerpt) ?? '');
+          $hits[] = ['signal' => $label, 'where' => (string) ($src['where'] ?? 'unknown'), 'excerpt' => $excerpt];
+        }
+      }
+    }
+    return $hits;
   }
 
   /** Post a comment on the issue. */
