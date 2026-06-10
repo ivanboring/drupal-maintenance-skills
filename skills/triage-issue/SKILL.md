@@ -1,6 +1,21 @@
 ---
 name: triage-issue
 description: Use when asked to triage, estimate, size, prioritize, or categorize GitLab issues. First checks for duplicates (closing them) and missing information (marking why::needsInfo), then sets weight, priority, and category against fixed rubrics and marks the issue state::accepted once all three are decided — only on projects configured in config/config.php, and never overwriting a value that already exists.
+# Read-only enforcement: while this skill is active, file-editing tools and git
+# are removed from Claude's tool pool. Triage only reads issues and sets
+# labels/weight through the GitLab API CLI — it never edits local files or runs
+# git. (Enforced by the harness for the duration of the skill — see "Security
+# model".)
+disallowed-tools:
+  - Edit
+  - Write
+  - NotebookEdit
+  - Bash(git *)
+  - Bash(* && git *)
+  - Bash(glab *)
+  - Bash(* && glab *)
+  - Bash(curl *)
+  - Bash(* && curl *)
 ---
 
 # Triage Issue
@@ -32,6 +47,14 @@ directly. There is **no `glab` and no `jq`**. A command runs **only** when:
 
 Anything else is **hard-refused** before any network call. To set up, copy
 `config/config.example.php` to `config/config.php` and add a token per project.
+
+**Read-only on the local machine.** The only writes this skill makes are GitLab
+comments and labels, via the allowlisted API. It never edits local files or runs git, and
+this is **enforced**: the skill's frontmatter lists `Edit`, `Write`, `NotebookEdit`, and
+`Bash(git *)` under `disallowed-tools`, so for as long as the skill is active the harness
+removes the file-editing tools from the pool and blocks every `git` command. (The
+restriction is scoped to the skill's run, so invoke it via `/triage-issue` and let it
+finish in that turn.)
 
 ## Input
 
@@ -68,11 +91,11 @@ php skills/triage-issue/scripts/triage.php <command> ...
 | `templates <project> [name]` | List issue template keys, or print one template's content. For the information prestep. |
 | `mark-duplicate <issue-url> <duplicate-url> [comment] [--force]` | Comment (naming the project managers without `@`, so the reporter can tag them if they disagree), then close + `why::duplicate` + `state::closed`. Refuses if already closed/stated. |
 | `mark-needs-info <issue-url> <comment> [--force]` | Add `why::needsInfo` and post what's missing. Refuses if already marked. |
-| `weight <issue-url> <weight> <comment> [--force]` | Set the weight (`1\|2\|4\|8\|16\|32\|64`) and post the comment. Refuses if already decided. **A weight over 16 (32/64) auto-tags the project managers, sets `why::needsInfo`, and must NOT be accepted.** |
+| `weight <issue-url> <weight> [--force]` | Set the weight (`1\|2\|4\|8\|16\|32\|64`). **No comment** — the reasoning goes into the single accept comment. Refuses if already decided. **A weight over 16 (32/64) auto-tags the project managers, sets `why::needsInfo`, and must NOT be accepted.** |
 | `no-weight <issue-url> <comment> [--force]` | Mark `No Estimation Available` and post the comment. Refuses if already weighted. |
 | `priority <issue-url> <priority> [--force]` | Set `priority::{minor\|normal\|major\|critical}`. Refuses if one exists. |
 | `category <issue-url> <category> [--force]` | Set `category::{bug\|feature\|meta\|plan\|support\|task}`. Refuses if one exists. |
-| `accept <issue-url> <comment>` | Post `<comment>` (one sentence why the category was set, one why the priority was set) and set `state::accepted` — only once weight, priority, and category are all decided. On `major`/`critical`, the developer maintainers are tagged in the comment. |
+| `accept <issue-url> <comment>` | Post the **single** `Automated Triage` `<comment>` (one sentence each on the weight, category, and priority) and set `state::accepted` — only once weight, priority, and category are all decided. On `major`/`critical`, the developer maintainers are tagged in the comment. |
 | `labels-ensure <project> [--create]` | Check (or with `--create`, create) every label the skill uses. |
 
 The script prints `OK:` on success and `REFUSED:`/`FAILED:` (non-zero exit) otherwise.
@@ -126,8 +149,9 @@ bulk mode or across multiple issues. Examples:
 4. **Estimate.** *(Only reached when both presteps passed.)* For each of the three
    dimensions still `none`, decide and set it using the
    rubrics below (skip any already set — the script refuses to overwrite anyway):
-   - **Weight:** pick a size, write a two-sentence comment, run `triage.php weight …`.
-     If the issue cannot be sized, run `triage.php no-weight …` instead.
+   - **Weight:** pick a size and run `triage.php weight <url> <weight>` — **no comment**;
+     the weight reasoning goes into the accept comment. If the issue cannot be sized, run
+     `triage.php no-weight …` instead.
      - **If the weight is over 16 (i.e. 32 or 64): this is a third gate.** The `weight`
        command automatically tags the project managers in a comment and sets
        `why::needsInfo`. **STOP HERE** — do not set priority/category and do not accept.
@@ -137,11 +161,12 @@ bulk mode or across multiple issues. Examples:
    - **Category:** run `triage.php category …`.
 
 5. **Accept it.** Once weight, priority, and category are all decided, run
-   `triage.php accept <issue-url> "<comment>"`. The comment must give **one sentence on
-   why you chose the category and one sentence on why you chose the priority** (the
-   script appends a maintainer tag automatically when the priority is `major` or
-   `critical`). `accept` sets `state::accepted` and refuses if anything is still missing,
-   so it is safe to always call it last.
+   `triage.php accept <issue-url> "<comment>"`. This posts the **single** triage comment,
+   starting with `Automated Triage:`, giving **one sentence each on why you chose the
+   weight, the category, and the priority** (the script appends a maintainer tag
+   automatically when the priority is `major` or `critical`). `accept` sets
+   `state::accepted` and refuses if anything is still missing, so it is safe to always
+   call it last.
 
 6. **Report** the outcome: duplicate / needs-info / flagged-for-PM-review (weight > 16) /
    or the chosen weight, priority, category and whether it was accepted.
@@ -192,7 +217,7 @@ is missing. The command appends a note telling the reporter to remove `why::need
 once they have added it. Do not guess or invent the missing details — that is exactly
 what this prestep exists to avoid. If the issue is reasonably complete, continue.
 
-**Comment formatting.** Every comment you pass (here, and in `weight`/`no-weight`) is
+**Comment formatting.** Every comment you pass (here, in `no-weight`, and in `accept`) is
 rendered as GitLab-Flavored Markdown, so compose it with **real line breaks** — pass an
 argument that actually contains newlines, not one long run-on line. List the missing
 items as a markdown bullet list, one per line. For example, the `mark-needs-info` comment
@@ -237,9 +262,11 @@ to review and remove the label. Stop after setting the weight in that case.
 If the issue lacks enough information to size (no clear scope, missing reproduction, an
 open question that changes the answer), use `no-weight` instead of guessing.
 
-**Weight comment rules.** Exactly two sentences, starting with `Automated Estimation: `,
-stating the size/weight and the main reason — or, for `no-weight`, that no estimate is
-available and why.
+**Where the weight reasoning goes.** Do not post a separate estimation comment — the
+`weight` command no longer takes one. Explain the size in **one sentence inside the
+single `accept` comment** (alongside the category and priority sentences). For
+`no-weight`, post a comment starting with `Automated Triage: ` stating that no estimate
+is available and why.
 
 ## Priority rubric
 

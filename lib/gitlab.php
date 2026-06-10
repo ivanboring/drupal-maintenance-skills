@@ -262,6 +262,56 @@ final class GitLab {
     return $all;
   }
 
+  /**
+   * Download the repository archive (zip) at the given ref and write it to
+   * $destPath. The response is binary, not JSON, so it is streamed straight to
+   * disk rather than going through request(). A null/empty ref uses the
+   * project's default branch.
+   *
+   * Used by the suggest-solution skill to obtain a read-only snapshot of the
+   * code at a specific version (branch or tag). It only ever READS the remote
+   * repository — there is no checkout, no remote, and nothing is pushed.
+   */
+  public function downloadArchive(?string $ref, string $destPath): void {
+    $query = [];
+    if ($ref !== null && $ref !== '') {
+      $query['sha'] = $ref;
+    }
+    $url = $this->origin . '/api/v4/projects/' . $this->projectId() . '/repository/archive.zip';
+    if ($query !== []) {
+      $url .= '?' . http_build_query($query);
+    }
+
+    $fh = fopen($destPath, 'wb');
+    if ($fh === false) {
+      throw new TriageError("FAILED: cannot open $destPath for writing.");
+    }
+
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_USERAGENT, 'suggest-solution/1.0 (+https://github.com/ivanboring/drupal-maintenance-skills)');
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['PRIVATE-TOKEN: ' . $this->token]);
+    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'GET');
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 300);
+    curl_setopt($ch, CURLOPT_FILE, $fh);
+
+    $ok = curl_exec($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+    fclose($fh);
+
+    if ($ok === false) {
+      @unlink($destPath);
+      throw new TriageError("FAILED: archive download error: $err");
+    }
+    if ($status >= 400) {
+      @unlink($destPath);
+      $refShown = ($ref !== null && $ref !== '') ? $ref : '(default branch)';
+      throw new TriageError("FAILED: GitLab API $status downloading archive at ref '$refShown'.");
+    }
+  }
+
   /* ----------------------------------------------------------------------- *
    * Issue + label operations
    * ----------------------------------------------------------------------- */
@@ -286,6 +336,22 @@ final class GitLab {
   /** GET all open issues in the project. */
   public function listOpenIssues(): array {
     return $this->paginate('/issues', ['state' => 'opened']);
+  }
+
+  /**
+   * GET the merge requests related to an issue. On drupal.org the issue-fork
+   * workflow opens the MR against the main project and references the issue, so
+   * a fix already in progress (or merged) shows up here. Uses the given iid, or
+   * the client's own iid when null.
+   *
+   * @return array<int,array> each MR array carries at least 'state' and 'web_url'.
+   */
+  public function relatedMergeRequests(?int $iid = null): array {
+    $iid = $iid ?? $this->iid;
+    if ($iid === null) {
+      throw new TriageError("No issue iid — build this client from an issue URL or pass an iid.");
+    }
+    return $this->paginate('/issues/' . $iid . '/related_merge_requests');
   }
 
   /**

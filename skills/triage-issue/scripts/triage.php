@@ -38,11 +38,12 @@
  *                Add why::needsInfo and post <comment> (what is missing). Refuses
  *                if already marked why::needsInfo.
  *
- *   weight       <issue-url> <weight> <comment> [--force]
- *                Set the issue weight (1|2|4|8|16|32|64) and post the comment.
- *                Refuses if already weighted or marked "No Estimation Available".
- *                A weight over 16 is auto-flagged for project-manager review:
- *                it tags the project managers and sets why::needsInfo (do not accept).
+ *   weight       <issue-url> <weight> [--force]
+ *                Set the issue weight (1|2|4|8|16|32|64). No comment is posted here —
+ *                the weight reasoning goes into the single accept comment. Refuses if
+ *                already weighted or marked "No Estimation Available". A weight over 16
+ *                is auto-flagged for project-manager review: it tags the project
+ *                managers and sets why::needsInfo (do not accept).
  *
  *   no-weight    <issue-url> <comment> [--force]
  *                Mark the issue "No Estimation Available" and post the comment.
@@ -55,11 +56,11 @@
  *                Set category::<value>. Refuses if a category:: label exists.
  *
  *   accept       <issue-url> <comment>
- *                Post <comment> (one sentence on why the category was set, one on
- *                why the priority was set) and set state::accepted — but ONLY once
- *                weight, priority, and category are all decided. Refuses otherwise,
- *                or if a state:: label already exists. If the priority is major or
- *                critical, the developer maintainers are tagged in the comment.
+ *                Post the single "Automated Triage" <comment> (one sentence each on why
+ *                the weight, category, and priority were chosen) and set state::accepted
+ *                — but ONLY once weight, priority, and category are all decided. Refuses
+ *                otherwise, or if a state:: label already exists. If the priority is
+ *                major or critical, the developer maintainers are tagged in the comment.
  *
  *   labels-ensure <project-url-or-path> [--create]
  *                Check (or with --create, create) every label the skill uses.
@@ -292,7 +293,6 @@ try {
     case 'weight': {
       $gl = GitLab::fromIssue(need($pos, 0, 'issue-url'));
       $weight = (int) need($pos, 1, 'weight');
-      $comment = need($pos, 2, 'comment');
       if (!in_array($weight, WEIGHTS, true)) {
         fail("usage error: weight must be one of " . implode('|', WEIGHTS) . "; got: $weight", 2);
       }
@@ -309,7 +309,8 @@ try {
         $gl->changeLabels([], [NO_EST_LABEL]);
       }
       $gl->setWeight($weight);
-      $gl->addComment($comment);
+      // No estimation comment here — the weight reasoning is folded into the single
+      // accept comment instead.
       if ($weight > HIGH_EFFORT_THRESHOLD) {
         // Too big to auto-accept: hand it to the project managers and gate it.
         $pms = (array) ($gl->settings()['project_managers_to_tag'] ?? []);

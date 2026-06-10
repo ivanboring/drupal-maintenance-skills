@@ -26,6 +26,11 @@ $config = [
     // Sent as the PRIVATE-TOKEN header on every request to this project.
     'token' => 'glpat-xxxxxxxxxxxxxxxxxxxx',
 
+    // Default version (branch or tag) the suggest-solution skill fetches when an
+    // issue does not name a version of its own. It is used as the ref for the
+    // source archive the skill downloads to read the code, e.g. '1.x'.
+    'default_version' => '1.x',
+
     // Maintainer usernames that may be @-tagged on issues (developer side).
     // Reserved for a later feature; not used by the current scripts.
     'developers_to_tag' => [
@@ -37,6 +42,7 @@ $config = [
     // Reserved for a later feature; not used by the current scripts.
     'project_managers_to_tag' => [
       'arianraeesi',
+      'vidit-anjaria',
     ],
   ],
 
