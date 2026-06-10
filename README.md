@@ -21,6 +21,18 @@ npx skills add ivanboring/drupal-maintenance-skills
 There is no longer any dependency on `glab` or `jq` — all GitLab work is done by PHP
 talking to the GitLab REST API v4 directly.
 
+## Security
+
+The skill only talks to dedicated projects, and only uses dedicated scripts that calls the REST API with the provided tokens. There is no shell execution, no git remotes, and no code execution at all. The skill is safe to run and perfect for automation. It can only read issues, change labels, estimations and comment.
+
+With that being said, prompt injection is a real possibility, to mitigate this, do the following:
+
+1. Use only project access tokens, not personal access tokens.
+2. Only give access to read/write API to the token.
+3. Run inside Docker, that doesn't have your SSH keys or access to your local filesystem.
+4. Run it using a harness that follows `disallowed-tools`.
+5. Always use the `/skill` command to run the skill, so that the disallowed tools are enforced.
+
 ## Configuration
 
 All commands run **only** against projects listed in `config/config.php`, and **only**
