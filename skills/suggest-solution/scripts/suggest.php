@@ -11,10 +11,10 @@
  * This skill proposes a fix for a small, already-accepted bug by reading the
  * project's code at a specific version and writing the suggestion as an issue
  * comment. The code is obtained by DOWNLOADING a zip archive of the chosen
- * version (branch or tag) and unzipping it under projects/ — there is no git
- * checkout and no remote, so nothing can ever be pushed. The script does the
- * GitLab + download + unzip work; the agent reads the code and writes the
- * suggestion.
+ * version (branch or tag), validating its paths, and unzipping it under
+ * projects/ — there is no git checkout and no remote, so nothing can ever be
+ * pushed. The script does the GitLab + download + unzip work; the agent reads
+ * the code and writes the suggestion.
  *
  * CODE ACCESS — the extracted archive under projects/ is a read-only snapshot.
  * The agent reads it to understand the bug and design the fix; it must NEVER

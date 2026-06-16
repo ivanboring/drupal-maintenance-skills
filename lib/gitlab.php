@@ -291,7 +291,11 @@ final class GitLab {
     curl_setopt($ch, CURLOPT_USERAGENT, 'suggest-solution/1.0 (+https://github.com/ivanboring/drupal-maintenance-skills)');
     curl_setopt($ch, CURLOPT_HTTPHEADER, ['PRIVATE-TOKEN: ' . $this->token]);
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'GET');
-    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    // Do not follow redirects while carrying the PRIVATE-TOKEN header. A
+    // same-host GitLab API response should return the archive directly; any
+    // redirect is treated as a failure instead of risking credential leakage to
+    // another origin.
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
     curl_setopt($ch, CURLOPT_TIMEOUT, 300);
     curl_setopt($ch, CURLOPT_FILE, $fh);
 
@@ -305,7 +309,7 @@ final class GitLab {
       @unlink($destPath);
       throw new TriageError("FAILED: archive download error: $err");
     }
-    if ($status >= 400) {
+    if ($status < 200 || $status >= 300) {
       @unlink($destPath);
       $refShown = ($ref !== null && $ref !== '') ? $ref : '(default branch)';
       throw new TriageError("FAILED: GitLab API $status downloading archive at ref '$refShown'.");
@@ -319,11 +323,14 @@ final class GitLab {
    */
   public static function validateArchiveForExtraction(PharData $archive): void {
     $it = new RecursiveIteratorIterator($archive);
+    $prefix = 'phar://' . $archive->getPath() . '/';
     foreach ($it as $file) {
       if (!$file instanceof PharFileInfo) {
         continue;
       }
-      $name = str_replace('\\', '/', $file->getRelativePathName());
+      $path = $file->getPathName();
+      $name = str_starts_with($path, $prefix) ? substr($path, strlen($prefix)) : $file->getFilename();
+      $name = str_replace('\\', '/', $name);
       if ($name === '' || str_starts_with($name, '/') || preg_match('#(^|/)\.\.(/|$)#', $name)) {
         throw new TriageError("REFUSED: archive contains an unsafe path: $name");
       }
@@ -360,6 +367,23 @@ final class GitLab {
   /** GET all open issues in the project. */
   public function listOpenIssues(): array {
     return $this->paginate('/issues', ['state' => 'opened']);
+  }
+
+  /**
+   * GET issues carrying ALL of $labels, filtered by $state
+   * ('opened'|'closed'|'all'), newest activity first. When $updatedAfter is
+   * given (ISO-8601 or YYYY-MM-DD), only issues updated at/after it are
+   * returned. Read-only.
+   */
+  public function issuesByLabels(array $labels, string $state = 'all', ?string $updatedAfter = null): array {
+    $query = ['state' => $state, 'order_by' => 'updated_at', 'sort' => 'desc'];
+    if ($labels !== []) {
+      $query['labels'] = implode(',', $labels);
+    }
+    if ($updatedAfter !== null && $updatedAfter !== '') {
+      $query['updated_after'] = $updatedAfter;
+    }
+    return $this->paginate('/issues', $query);
   }
 
   /**

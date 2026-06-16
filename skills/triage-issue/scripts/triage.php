@@ -12,7 +12,8 @@
  *
  *   list-pre-triage <project-url-or-path>
  *                List OPEN issues that have no state:: label yet AND are not
- *                labelled why::needsInfo (one web URL per line on stdout; a
+ *                labelled why::needsInfo, automation::error, or
+ *                "No Estimation Available" (one web URL per line on stdout; a
  *                SUMMARY count on stderr).
  *
  *   show         <issue-url>
@@ -62,6 +63,15 @@
  *                otherwise, or if a state:: label already exists. If the priority is
  *                major or critical, the developer maintainers are tagged in the comment.
  *
+ *   track        <issue-url> <low-context|novice|none> [low-context|novice] [--remove]
+ *                Add the optional contributor-track label(s) — "Low Context Issue"
+ *                and/or "Novice" — to a triaged issue (additive; an issue may carry
+ *                neither, one, or both). The label must already exist in the project
+ *                (run labels-ensure --create first); it is never minted implicitly.
+ *                Refuses on a gated issue. "none" is an explicit no-op. --remove takes
+ *                the label(s) off instead. Set only as part of a triage, or as an
+ *                explicit per-named-issue check.
+ *
  *   labels-ensure <project-url-or-path> [--create]
  *                Check (or with --create, create) every label the skill uses.
  *
@@ -89,9 +99,25 @@ const CLOSED_LABEL     = 'state::closed';
 const ERROR_LABEL      = 'automation::error';
 const ERROR_COLOR      = '#d73a4a';
 
+// Optional contributor-track labels — additive tags that flag an issue as a good
+// pick-up for a particular kind of contributor. They are NOT scoped, NOT required,
+// and an issue may carry neither, one, or both. Set only as part of a triage (or an
+// explicit per-named-issue check), and only once the label already exists.
+const LOW_CONTEXT_LABEL = 'Low Context Issue';
+const NOVICE_LABEL      = 'Novice';
+const TRACK_COLOR       = '#ffc423';
+
 const PRIORITIES = ['minor', 'normal', 'major', 'critical'];
 const CATEGORIES = ['bug', 'feature', 'meta', 'plan', 'support', 'task'];
 const WEIGHTS    = [1, 2, 4, 8, 16, 32, 64];
+
+/** CLI token => label name for the optional contributor-track labels. */
+function track_labels(): array {
+  return [
+    'low-context' => LOW_CONTEXT_LABEL,
+    'novice'      => NOVICE_LABEL,
+  ];
+}
 
 // A weight strictly above this is too big to auto-accept: it is flagged for
 // project-manager review (PM-tagged comment + why::needsInfo) instead.
@@ -108,6 +134,7 @@ function managed_labels(): array {
   $labels[NEEDS_INFO_LABEL]  = WHY_COLOR;
   $labels[NO_EST_LABEL]      = NO_EST_COLOR;
   $labels[ERROR_LABEL]       = ERROR_COLOR;
+  foreach (track_labels() as $name) { $labels[$name] = TRACK_COLOR; }
   return $labels;
 }
 
@@ -216,10 +243,16 @@ try {
         if (GitLab::hasLabel($issue, 'why::needsInfo')) {
           continue; // waiting on the reporter — skip until the info arrives
         }
+        if (GitLab::hasLabel($issue, ERROR_LABEL)) {
+          continue; // prompt-injection quarantine — human review required
+        }
+        if (GitLab::hasLabel($issue, NO_EST_LABEL)) {
+          continue; // sized as "No Estimation Available" — parked, not awaiting pre-triage
+        }
         echo ($issue['web_url'] ?? '') . "\n";
         $emitted++;
       }
-      fwrite(STDERR, "SUMMARY: $emitted of " . count($issues) . " open issue(s) are ready for pre-triage (no state:: label, not why::needsInfo).\n");
+      fwrite(STDERR, "SUMMARY: $emitted of " . count($issues) . " open issue(s) are ready for pre-triage (no state:: label, not why::needsInfo, not " . ERROR_LABEL . ", not \"" . NO_EST_LABEL . "\").\n");
       break;
     }
 
@@ -469,6 +502,76 @@ try {
       break;
     }
 
+    case 'track': {
+      $gl = GitLab::fromIssue(need($pos, 0, 'issue-url'));
+      $map = track_labels(); // token => label name
+      $remove = isset($flags['--remove']);
+
+      // Positional args after the URL name the track(s): one or more of the tokens,
+      // or the literal "none" to explicitly record that no track label applies.
+      $tokens = array_slice($pos, 1);
+      $valid = implode('|', array_keys($map));
+      if ($tokens === []) {
+        fail("usage error: track needs one or more of: $valid (or 'none')", 2);
+      }
+      if (count($tokens) === 1 && $tokens[0] === 'none') {
+        echo "OK: no contributor-track label applies\n";
+        break;
+      }
+      $wanted = [];
+      foreach ($tokens as $t) {
+        if (!isset($map[$t])) {
+          fail("usage error: unknown track '$t'; valid: $valid (or 'none')", 2);
+        }
+        $wanted[$map[$t]] = true; // de-dupe by label name
+      }
+      $wanted = array_keys($wanted);
+
+      $issue = $gl->getIssue();
+      // A track label is part of the triage — never apply it to a gated issue.
+      if ($gate = gating_block($issue)) {
+        fail("REFUSED: cannot set a contributor-track label — $gate. Resolve the prestep first.", 3);
+      }
+
+      if ($remove) {
+        $toRemove = array_values(array_filter($wanted, static fn($l) => GitLab::hasLabel($issue, $l)));
+        if ($toRemove === []) {
+          echo "OK: none of the requested track label(s) were present; nothing to remove\n";
+          break;
+        }
+        $gl->changeLabels([], $toRemove);
+        echo "OK: removed " . implode(', ', $toRemove) . "\n";
+        break;
+      }
+
+      // ADD path: the label must already exist in the project. Never create it
+      // implicitly — adding an unknown label name would otherwise mint a stray
+      // label with a random colour. Make sure it exists first, but only then.
+      $existing = [];
+      foreach ($gl->listLabels() as $label) {
+        $existing[(string) ($label['name'] ?? '')] = true;
+      }
+      $undefined = array_values(array_filter($wanted, static fn($l) => !isset($existing[$l])));
+      if ($undefined !== []) {
+        fail("REFUSED: track label(s) not defined in the project yet: " . implode(', ', $undefined)
+          . ". Run `labels-ensure <project> --create` first.", 3);
+      }
+
+      $toAdd   = array_values(array_filter($wanted, static fn($l) => !GitLab::hasLabel($issue, $l)));
+      $already = array_values(array_filter($wanted, static fn($l) => GitLab::hasLabel($issue, $l)));
+      if ($toAdd === []) {
+        echo "OK: already set: " . implode(', ', $already) . "\n";
+        break;
+      }
+      $gl->addLabels($toAdd);
+      $msg = "OK: set " . implode(', ', $toAdd);
+      if ($already !== []) {
+        $msg .= " (already had: " . implode(', ', $already) . ")";
+      }
+      echo $msg . "\n";
+      break;
+    }
+
     case 'labels-ensure': {
       $gl = GitLab::fromProject(need($pos, 0, 'project-url-or-path'));
       $create = isset($flags['--create']);
@@ -517,7 +620,7 @@ try {
     case '':
     case '-h':
     case '--help':
-      fwrite(STDERR, "usage: triage.php <list-pre-triage|show|search|templates|mark-duplicate|mark-needs-info|weight|no-weight|priority|category|accept|labels-ensure> ...\n");
+      fwrite(STDERR, "usage: triage.php <list-pre-triage|show|search|templates|mark-duplicate|mark-needs-info|weight|no-weight|priority|category|accept|track|labels-ensure> ...\n");
       exit(2);
 
     default:

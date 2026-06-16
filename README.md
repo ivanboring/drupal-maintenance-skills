@@ -23,19 +23,21 @@ talking to the GitLab REST API v4 directly.
 
 ## Security
 
-The skill only talks to dedicated projects, and only uses dedicated scripts that calls the REST API with the provided tokens. There is no shell execution, no git remotes, and no code execution at all. The skill is safe to run and perfect for automation. It can only read issues, change labels, estimations and comment.
+The skill only talks to dedicated projects, and only uses dedicated scripts that call the REST API with the provided tokens. There is no shell execution, no git remotes, and no remote code execution. It can read issues, download read-only source archives for `suggest-solution`, change labels/estimations, and comment.
 
-Any comment written will be deterministically stripped of any slash commands, so no prompt injection escalation is possible through comments.
+Any comment written will be deterministically stripped of GitLab slash commands, so generated comments cannot trigger quick-action side effects such as closing, labelling, or assigning issues.
 
-With that being said, prompt injection is a real possibility, to mitigate this, do the following:
+Prompt injection is treated as an untrusted-input problem, not as something an LLM is asked to judge. Both skills scan issue titles, descriptions, and comments before printing them into the agent context; suspicious issues are refused and flagged with `automation::error` for human review. `suggest-solution` also refuses already flagged issues and validates archive paths before extracting source snapshots.
+
+This substantially reduces the attack surface, but no automation that reads public issue text can be proven "completely safe" against every future prompt-injection phrasing. To reduce the blast radius:
 
 1. Use only project access tokens, not personal access tokens.
-2. Only give access to read/write API to the token.
+2. Use the least-privileged token that can perform the required issue and label operations.
 3. Run inside Docker, that doesn't have your SSH keys or access to your local filesystem.
 4. Run it using a harness that follows `disallowed-tools`.
 5. Always use the `/skill` command to run the skill, so that the disallowed tools are enforced.
 
-If prompt injection bypasses guardrails, the worst that can happen is that the skill makes unwanted comment (without slash commands) or changes labels/estimations on issues. It cannot do anything else, and it cannot do anything outside the project(s) it has access to.
+If prompt injection bypasses guardrails while the skill harness is correctly enforcing the listed `disallowed-tools`, the scripted actions are limited to unwanted comments (without slash commands), label changes, estimations, and accepted/closed issue state changes on configured projects. Keep the token scoped tightly so a compromised run cannot exceed the intended project boundary.
 
 ## Configuration
 
@@ -127,9 +129,10 @@ Proposes a fix for a small, already-triaged bug. It works through every open iss
 `automation::suggestionExists`. For each one it:
 
 * **Downloads the code** at the relevant version — a zip archive of the branch or tag the
-  issue targets (or the project's `default_version` when the issue names none), unzipped
-  under `projects/<module>-<ref>/`. There is no git checkout and no remote, so nothing can
-  be pushed; the extracted snapshot is read **strictly read-only**.
+  issue targets (or the project's `default_version` when the issue names none), validated
+  for safe relative paths, then unzipped under `projects/<module>-<ref>/`. There is no git
+  checkout and no remote, so nothing can be pushed; the extracted snapshot is read
+  **strictly read-only**.
 * **Reads the code** to find the root cause and a concrete fix.
 * **Posts the suggestion** — up to four paragraphs (root cause, where in the code, the
   proposed change, caveats) as a GitLab comment — and sets `automation::suggestionExists`

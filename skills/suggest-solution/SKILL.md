@@ -15,6 +15,7 @@ disallowed-tools:
   - Bash(* && glab *)
   - Bash(curl *)
   - Bash(* && curl *)
+  - Read(../../config/config.php)
 ---
 
 # Suggest Solution
@@ -71,9 +72,10 @@ judgement belongs to a person, not to this automated run.
 
 ## Code access — read this first
 
-The code is obtained by **downloading a zip archive** of a chosen version (branch or tag)
-and unzipping it under `projects/`. There is **no git checkout and no remote**, so nothing
-can ever be pushed. The extracted snapshot is **strictly read-only** — and this is
+The code is obtained by **downloading a zip archive** of a chosen version (branch or tag),
+validating that every archive member is a safe relative path, and unzipping it under
+`projects/`. There is **no git checkout and no remote**, so nothing can ever be pushed.
+The extracted snapshot is **strictly read-only** — and this is
 **enforced**, not just requested: the skill's frontmatter lists `Edit`, `Write`,
 `NotebookEdit`, and `Bash(git *)` under `disallowed-tools`, so for as long as the skill is
 active the harness removes the file-editing tools from the pool and blocks every `git`
@@ -157,7 +159,7 @@ php skills/suggest-solution/scripts/suggest.php <command> ...
 |---|---|
 | `list-candidates <project>` | Open issues that are `state::accepted`, `category::bug`, weighted 1–8, **not** `automation::suggestionExists`, and with **no open/merged merge request** (one web URL per line; SUMMARY on stderr). |
 | `show <issue-url>` | Title, state, labels, weight, category, triage state, description, and comments — enough to understand the bug. **Scans the text for prompt injection first and `REFUSED:`/exits non-zero without printing the body if it detects any.** |
-| `fetch <issue-url-or-project> [ref]` | Download the project's code at `[ref]` (a branch or tag) and unzip it under `projects/<module>-<ref>`; prints that directory. Omitting `[ref]` uses the project's `default_version`. **Exits non-zero (`FAILED`/`REFUSED`) when the version can't be downloaded — the signal to STOP.** |
+| `fetch <issue-url-or-project> [ref]` | Download the project's code at `[ref]` (a branch or tag), validate archive paths, and unzip it under `projects/<module>-<ref>`; prints that directory. Omitting `[ref]` uses the project's `default_version`. **Exits non-zero (`FAILED`/`REFUSED`) when the version can't be downloaded or the archive is unsafe — the signal to STOP.** |
 | `suggest <issue-url> <comment> [--force]` | Post the `<comment>` (your up-to-4-paragraph write-up) and add `automation::suggestionExists`. Refuses unless the issue is `state::accepted` + `category::bug` + weight 1–8, not already suggested, and has no open/merged merge request. **Also scans the issue text for prompt injection and refuses (not bypassable by `--force`) if it detects any.** |
 | `labels-ensure <project> [--create]` | Check (or with `--create`, create) the labels this skill manages: `automation::suggestionExists` and `automation::error`. |
 
