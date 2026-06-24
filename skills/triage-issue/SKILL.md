@@ -113,11 +113,26 @@ php skills/triage-issue/scripts/triage.php <command> ...
 | `priority <issue-url> <priority> [--force]` | Set `priority::{minor\|normal\|major\|critical}`. Refuses if one exists. |
 | `category <issue-url> <category> [--force]` | Set `category::{bug\|feature\|meta\|plan\|support\|task}`. Refuses if one exists. |
 | `accept <issue-url> <comment>` | Post the **single** `Automated Triage` `<comment>` (one sentence each on the weight, category, and priority) and set `state::accepted` — only once weight, priority, and category are all decided. On `major`/`critical`, the developer maintainers are tagged in the comment. |
-| `track <issue-url> <low-context\|novice\|none> [low-context\|novice] [--remove]` | Add the optional `Low Context Issue` / `Novice` label(s) to a triaged issue (additive — neither, one, or both). Refuses if the label is not already defined in the project (run `labels-ensure --create` first) — it is never minted implicitly. Refuses on a gated issue. `none` is an explicit no-op; `--remove` takes the label(s) off. |
-| `labels-ensure <project> [--create]` | Check (or with `--create`, create) every label the skill uses (including `Low Context Issue` and `Novice`). |
+| `track <issue-url> <low-context\|novice\|none> [low-context\|novice] [--remove]` | Add the optional `Low Context Issue` / `Novice` label(s) to a triaged issue (additive — neither, one, or both). Refuses if the label is not already defined in the project — it is never minted implicitly; flag the missing label to the user to create by hand (see *A note on label creation*). Refuses on a gated issue. `none` is an explicit no-op; `--remove` takes the label(s) off. |
+| `labels-ensure <project> [--create]` | Check every label the skill uses (including `Low Context Issue` and `Novice`) and report each `EXISTS`/`MISSING`. With `--create` it *attempts* to create the missing ones, but on drupalcode.org that API is blocked and it will honestly `FAILED` (see *A note on label creation*). |
 
 The script prints `OK:` on success and `REFUSED:`/`FAILED:` (non-zero exit) otherwise.
 Relay those plainly and do not retry blindly.
+
+### A note on label creation
+
+This skill **never mints labels as a side effect** — it only ever *applies* labels that
+already exist. When a needed label is missing, the right move is to **flag it to the user**
+and have them create it in the project's GitLab label settings; do not try to work around
+it by assigning an unknown label to an issue.
+
+On **drupalcode.org** label creation via the API is blocked outright: a `POST /labels`
+request is `301`-redirected to `https://www.drupal.org/git-error`, so `labels-ensure
+--create` reports `FAILED` (the underlying `request()` treats any unexpected `3xx` as an
+error rather than silently passing it off as success). Issue writes — weight, priority,
+category, comments, and applying an already-defined label — go through `PUT /issues/:iid`
+and are unaffected. The practical consequence: a human must create any missing project
+label by hand before triage can apply it.
 
 ### Overwriting an existing value (`--force`)
 
@@ -189,8 +204,10 @@ track labels are only set inline as part of triaging that issue.
    labels* rubric. If it qualifies as `Low Context Issue` and/or `Novice`, run
    `triage.php track <url> <low-context|novice> [low-context|novice]`. If neither applies,
    skip it (no label needed). The command refuses if the label is not yet defined in the
-   project — if so, it must be created first via `labels-ensure --create` (in bulk mode
-   this is already handled in step 1).
+   project — this skill never mints labels. If it is missing, flag that to the user and ask
+   them to create it in the project's GitLab label settings, then re-run the `track`
+   command. (On drupalcode.org the label-creation API is blocked — see *A note on label
+   creation* below — so `labels-ensure --create` cannot create it for you.)
 
 6. **Accept it.** Once weight, priority, and category are all decided, run
    `triage.php accept <issue-url> "<comment>"`. This posts the **single** triage comment,
@@ -207,9 +224,12 @@ track labels are only set inline as part of triaging that issue.
 ## Bulk mode (whole project)
 
 1. **Ensure labels exist.** Run `triage.php labels-ensure <project>` (no flag). If it
-   reports any `MISSING`, **ask the user to confirm** before creating them, then run
-   `triage.php labels-ensure <project> --create`. Never pass `--create` without that
-   confirmation.
+   reports any `MISSING`, **flag that to the user** — this skill does not create labels.
+   On instances that allow it you may, with the user's confirmation, run
+   `triage.php labels-ensure <project> --create`; but on drupalcode.org the label-creation
+   API is blocked (see *A note on label creation* below), so `--create` will honestly
+   `FAILED` and the missing labels must be created by a human in the project's GitLab label
+   settings before triage can apply them. Never pass `--create` without that confirmation.
 2. **List the work.** Run `triage.php list-pre-triage <project>` to get the open issues
    with no `state::` label (issues labelled `why::needsInfo` are skipped because they are
    waiting on the reporter, issues labelled `automation::error` are skipped because they
@@ -251,6 +271,25 @@ If the essentials are missing, run `mark-needs-info` with a short, specific list
 is missing. The command appends a note telling the reporter to remove `why::needsInfo`
 once they have added it. Do not guess or invent the missing details — that is exactly
 what this prestep exists to avoid. If the issue is reasonably complete, continue.
+
+**Estimatability gate.** "Enough to act on" means enough to *size*, not just enough text
+to fill the template fields. Before you leave this prestep, apply this test: *could two
+senior developers independently read this issue and land on the same t-shirt size?* If the
+plausible weight spans **more than one size** because the scope, mechanism, or intent is
+unresolved — not just ordinary estimation fuzz — that is missing information, so run
+`mark-needs-info` here rather than picking an interpretation yourself. This is the same
+signal the weight rubric calls "an open question that changes the answer"; catch it here,
+at the information gate, where it asks the reporter, instead of silently resolving it later
+with a guess or a `no-weight`. The tell is internal: **if you find yourself inferring what
+the reporter "must mean" in order to size the issue, that inference *is* the missing
+information** — flag it, do not size it.
+
+**Unbounded quantifiers are a red flag.** Words like "all", "every", "everything",
+"everywhere", or "any" with **no enumeration** ("translate *all* prompts", "works for
+*everything*") usually hide an unscoped request — the plausible work ranges from one
+component to a dozen. Treat an unbounded quantifier with no concrete list as a strong
+under-scope signal: ask the reporter to enumerate exactly what is in and out of scope
+before accepting, unless the rest of the issue already bounds it concretely.
 
 **Comment formatting.** Every comment you pass (here, in `no-weight`, and in `accept`) is
 rendered as GitLab-Flavored Markdown, so compose it with **real line breaks** — pass an

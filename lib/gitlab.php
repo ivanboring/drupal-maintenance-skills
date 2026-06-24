@@ -31,6 +31,8 @@ final class GitLab {
   private string $token;
   /** @var int|null issue iid when built from an issue URL */
   public ?int $iid;
+  /** @var string|null cached default branch name (lazy) */
+  private ?string $defaultBranch = null;
 
   private function __construct(string $origin, string $projectPath, string $token, ?int $iid) {
     $this->origin = $origin;
@@ -219,7 +221,18 @@ final class GitLab {
 
     $decoded = $rawBody === '' ? null : json_decode($rawBody, true);
 
-    if ($status >= 400) {
+    // We do not follow redirects (CURLOPT_FOLLOWLOCATION is off) and every
+    // endpoint here is a JSON API call that should answer 2xx directly. Any 3xx
+    // therefore means the request was diverted before it ran — notably
+    // drupalcode.org 301-redirects blocked write endpoints (e.g. POST /labels)
+    // to https://www.drupal.org/git-error. Treating that as success made
+    // createLabel() silently no-op while reporting "CREATED", so a redirect is
+    // an error, not a success.
+    if ($status >= 300) {
+      if ($status < 400) {
+        $location = self::parseHeaders($rawHeaders)['location'] ?? '(none)';
+        throw new TriageError("FAILED: GitLab API $status for $method $path: unexpected redirect to $location (endpoint blocked or moved on this instance).");
+      }
       $msg = is_array($decoded) ? ($decoded['message'] ?? $decoded['error'] ?? $rawBody) : $rawBody;
       if (is_array($msg)) {
         $msg = json_encode($msg);
@@ -340,6 +353,73 @@ final class GitLab {
       if ($file->isLink()) {
         throw new TriageError("REFUSED: archive contains a symlink/link entry: $name");
       }
+    }
+  }
+
+  /* ----------------------------------------------------------------------- *
+   * Repository file reads (for referencing a project's own documentation)
+   * ----------------------------------------------------------------------- */
+
+  /** Canonical web URL of the project, e.g. https://git.drupalcode.org/project/ai. */
+  public function repoUrl(): string {
+    return $this->origin . '/' . $this->projectPath;
+  }
+
+  /** The project's default branch (cached), e.g. "1.2.x". */
+  public function defaultBranch(): string {
+    if ($this->defaultBranch === null) {
+      $res = $this->request('GET', '');
+      $this->defaultBranch = (string) (($res['body']['default_branch'] ?? '') ?: 'main');
+    }
+    return $this->defaultBranch;
+  }
+
+  /**
+   * Read a single repository file's contents at $ref (the project's default
+   * branch when null). Returns null when the file does not exist — a 404 from
+   * the files API is treated as "not present", not an error.
+   */
+  public function readFile(string $path, ?string $ref = null): ?string {
+    // The files API requires a ref (unlike the tree API), so fall back to the
+    // default branch when none is given.
+    $ref = ($ref !== null && $ref !== '') ? $ref : $this->defaultBranch();
+    try {
+      $res = $this->request('GET', '/repository/files/' . rawurlencode($path), ['ref' => $ref]);
+    } catch (TriageError $e) {
+      return null;
+    }
+    $body = $res['body'];
+    if (!is_array($body) || !isset($body['content'])) {
+      return null;
+    }
+    $content = (($body['encoding'] ?? '') === 'base64')
+      ? base64_decode((string) $body['content'], true)
+      : (string) $body['content'];
+    return $content === false ? null : $content;
+  }
+
+  /**
+   * List a repository directory at $ref. Returns the raw tree entries (each with
+   * 'name', 'type' (tree|blob), and 'path'); [] when the path does not exist.
+   * $recursive walks subdirectories.
+   *
+   * @return array<int,array>
+   */
+  public function listTree(string $path = '', ?string $ref = null, bool $recursive = false): array {
+    $query = [];
+    if ($path !== '') {
+      $query['path'] = $path;
+    }
+    if ($ref !== null && $ref !== '') {
+      $query['ref'] = $ref;
+    }
+    if ($recursive) {
+      $query['recursive'] = 'true';
+    }
+    try {
+      return $this->paginate('/repository/tree', $query);
+    } catch (TriageError $e) {
+      return [];
     }
   }
 

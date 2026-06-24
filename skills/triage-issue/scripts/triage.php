@@ -554,7 +554,9 @@ try {
       $undefined = array_values(array_filter($wanted, static fn($l) => !isset($existing[$l])));
       if ($undefined !== []) {
         fail("REFUSED: track label(s) not defined in the project yet: " . implode(', ', $undefined)
-          . ". Run `labels-ensure <project> --create` first.", 3);
+          . ". Create them in the project's GitLab label settings first, then re-run."
+          . " (This skill does not mint labels — and on drupalcode.org the label-creation"
+          . " API is blocked, so `labels-ensure --create` cannot create them either.)", 3);
       }
 
       $toAdd   = array_values(array_filter($wanted, static fn($l) => !GitLab::hasLabel($issue, $l)));
